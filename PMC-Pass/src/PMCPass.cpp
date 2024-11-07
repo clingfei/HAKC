@@ -54,6 +54,10 @@ namespace {
             //            "fib_nh_common_init",
             "_raw_spin_lock_bh",
             "_raw_spin_unlock_bh",
+            "_raw_spin_lock_irq",
+            "_raw_spin_unlock_irq",
+            "_raw_spin_lock",
+            "_raw_spin_unlock",
             "spin_lock_bh",
             "spin_unlock_bh",
             //            "call_fib_notifiers",
@@ -61,6 +65,7 @@ namespace {
             //            "dev_get_flags",
             "strlen",
             "strchr",
+            "kfree",
             //            "dev_get_iflink",
             //            "dev_mc_add",
             //            "sock_alloc_send_skb",
@@ -185,19 +190,20 @@ namespace {
      * @brief The set of files to run our analysis on
      */
     const std::set<StringRef> source_files_to_instrument = {
-            "../net/",
-            "../fs/proc/proc_sysctl.c",
-            "../lib/list_debug.c",
-            "../lib/nlattr.c",
-            "../lib/rhashtable.c",
-            "../lib/string.c",
-            "../lib/kobject_uevent.c",
-            "../fs/proc/generic.c",
-            "../kernel/",
-            "../security/commoncap.c",
-            "../drivers/net",
-            "../lib/percpu_counter.c",
-            "../lib/vsprintf.c",
+            // "net/",
+            "fs/proc/proc_sysctl.c",
+            "lib/list_debug.c",
+            "lib/nlattr.c",
+            "lib/rhashtable.c",
+            "lib/string.c",
+            "lib/kobject_uevent.c",
+            "fs/proc/generic.c",
+            "kernel/",
+            "security/commoncap.c",
+            "drivers/block/null_blk",
+            "lib/percpu_counter.c",
+            "lib/vsprintf.c",
+            "block/"
     };
 
     /**
@@ -315,7 +321,7 @@ namespace {
      * @param Module
      */
     HAKCModuleTransformation::HAKCModuleTransformation(Module &Module)
-            : CommonHAKCAnalysis(false), M(Module),
+            : CommonHAKCAnalysis(true), M(Module),
               compartmentalized(isModuleCompartmentalized(Module)),
               moduleModified(false),
               breakOnMissingTransfer(true),
@@ -329,11 +335,12 @@ namespace {
                 source_files_to_skip.find(M.getSourceFileName()) ==
                 source_files_to_skip.end()) {
                 sourceShouldBeInstrumented = true;
+                errs() << M.getSourceFileName() << "should be instrumented\n";
                 break;
             }
         }
         if (!sourceShouldBeInstrumented) {
-            //            errs() << "Skipping " << M.getSourceFileName() << "\n";
+                       errs() << "Skipping " << M.getSourceFileName() << "\n";
             return;
         }
 
@@ -1265,6 +1272,9 @@ namespace {
                                                                  isData
                                                                  ? irBuilder.getFalse()
                                                                  : irBuilder.getTrue()});
+        errs() << "add signature call in" << getFunction().getName().str() << ":\n";
+        result->print(errs());
+        errs() << "\n";
         return result;
     }
 
@@ -1298,6 +1308,9 @@ namespace {
                                                                  isData
                                                                  ? irBuilder.getFalse()
                                                                  : irBuilder.getTrue()});
+        errs() << "add signature with color call in" << getFunction().getName().str() << ":\n";
+        result->print(errs());
+        errs() << "\n";
         return result;
     }
 
@@ -1346,6 +1359,9 @@ namespace {
                                                                 isData
                                                                 ? irBuilder.getFalse()
                                                                 : irBuilder.getTrue()});
+        errs() << "add transfer call in" << getFunction().getName().str() << ":\n";
+        result->print(errs());
+        errs() << "\n";
         addedClaqueTransferCount++;
         if (debug_output) {
             errs() << "Created transfer for ";
@@ -1418,6 +1434,9 @@ namespace {
                                                                 isCode
                                                                 ? irBuilder.getTrue()
                                                                 : irBuilder.getFalse()});
+        errs() << "add transfer to target call in" << getFunction().getName().str() << ":\n";
+        result->print(errs());
+        errs() << "\n";
         addedCliqueTransferCount++;
         return irBuilder.CreateBitCast(result, value->getType());
     }
@@ -1559,10 +1578,14 @@ namespace {
                 get_color_name, ftype);
         assert(save_color_call && "Could not get save color call");
 
-        return irBuilder.CreateCall(save_color_call,
+        auto result = irBuilder.CreateCall(save_color_call,
                                     {irBuilder.CreateBitCast(operand,
                                                              ftype->getParamType(
                                                                      0))});
+        errs() << "add save color call in" << getFunction().getName().str() << ":\n";
+        result->print(errs());
+        errs() << "\n";
+        return result;
     }
 
     void HAKCFunctionAnalysis::addGetSafeCodePtr(Value *indirectCallTarget) {
@@ -1639,6 +1662,9 @@ namespace {
                                  exitTokens->getType()->getPointerElementType()->getArrayNumElements(),
                                  false)};
         Value *auth_result = irBuilder.CreateCall(auth_check, args);
+        errs() << "add auth_check call in" << getFunction().getName().str() << ":\n";
+        auth_result->print(errs());
+        errs() << "\n";
         auth_call = irBuilder.CreateBitCast(auth_result,
                                             indirectCallTarget->getType());
         addedCodeCheckCount++;
@@ -1773,6 +1799,9 @@ namespace {
 
         CallInst *auth_call = irBuilder.CreateCall(auth_check, {s_ptr,
                                                                 currentAccessToken});
+        errs() << "add auth call in" << getFunction().getName().str() << ":\n";
+        auth_call->print(errs());
+        errs() << "\n";
         Value *bitcast = irBuilder.CreateBitCast(auth_call,
                                                  signed_ptr->getType());
 
@@ -3382,6 +3411,13 @@ namespace {
                        << transformation.totalCodeChecks << "\n"
                        << "Total Transfers:   " << transformation.totalTransfers
                        << "\n";
+            }
+            if (transformation.isModuleTransformed()) {
+                int ll_fd;
+                llvm::sys::fs::openFileForWrite(M.getSourceFileName() + "_koi.ll", ll_fd);
+                llvm::raw_fd_ostream ll_file(ll_fd, true, true);
+                M.print(ll_file, nullptr);
+                ll_file.close();
             }
             return transformation.isModuleTransformed();
         }
