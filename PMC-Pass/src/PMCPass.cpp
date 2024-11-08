@@ -725,7 +725,7 @@ namespace {
                     errs() << " to section " << finalName << "\n";
                 }
 
-                global.setSection(finalName);
+                // global.setSection(finalName);
                 moduleModified = true;
             }
         }
@@ -2208,8 +2208,8 @@ namespace {
                     //                    Value *color = saveColor(structMember);
                     LoadInst *load = irBuilder.CreateLoad(structMember);
                     CallInst *transferCall = addSignatureWithColorCall(load);
-                    result = irBuilder.CreateStore(transferCall,
-                                                   structMember);
+                    // result = irBuilder.CreateStore(transferCall,
+                    //                                structMember);
                     if (debug_output) {
                         errs() << "Created transfer for member " << i
                                << " (";
@@ -2272,7 +2272,7 @@ namespace {
             signed_clones.find(global) == signed_clones.end()) {
             irBuilder.SetInsertPoint(I);
             auto *signed_ptr = addSignatureWithColorCall(global);
-            signed_clones[global] = signed_ptr;
+            signed_clones[global] = global;
             return;
         }
         if (debug_output) {
@@ -2308,7 +2308,7 @@ namespace {
                     signed_clones.find(global) == signed_clones.end()) {
                     irBuilder.SetInsertPoint(I);
                     auto *signed_ptr = addSignatureWithColorCall(global);
-                    signed_clones[global] = signed_ptr;
+                    signed_clones[global] = global;
                 }
 
                 Instruction *link;
@@ -2338,9 +2338,9 @@ namespace {
                     if (!dominatorTree.dominates(transfer, I)) {
                         transfer->moveBefore(I);
                     }
-                    signed_clones[def_chain[j]] = transfer;
+                    signed_clones[def_chain[j]] = def_chain[j];
                     if (def_chain[j] == arg.get()) {
-                        signed_clones[global] = transfer;
+                        signed_clones[global] = def_chain[j];
                     }
                     continue;
                 }
@@ -3265,7 +3265,7 @@ namespace {
         if (debug_output) {
             errs() << "Changing section to " << sectionName << "\n";
         }
-        getFunction().setSection(sectionName);
+        // getFunction().setSection(sectionName);
     }
 
     HAKCFunctionAnalysis::HAKCFunctionAnalysis(Function &F, bool debug,
