@@ -190,7 +190,10 @@ namespace {
      * @brief The set of files to run our analysis on
      */
     const std::set<StringRef> source_files_to_instrument = {
-            // "net/",
+            // "../net/",
+            "fs/char_dev.c",
+            "fs/ioctl.c",
+
             "fs/proc/proc_sysctl.c",
             "lib/list_debug.c",
             "lib/nlattr.c",
@@ -200,10 +203,9 @@ namespace {
             "fs/proc/generic.c",
             "kernel/",
             "security/commoncap.c",
-            "drivers/block/null_blk",
+            "drivers/i2c",
             "lib/percpu_counter.c",
             "lib/vsprintf.c",
-            "block/"
     };
 
     /**
