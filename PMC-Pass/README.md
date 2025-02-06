@@ -39,3 +39,8 @@ To boot PMC Protected kernel
 
 1. Build QEMU from latest main branch to get MTE support
 1. Follow the `Emulate with QEMU` directions in rpi-setup/README.md
+
+## Usage
+```
+make LLVM=1 KCFLAGS="-g -Xclang -no-opaque-pointers -Xclang -load -Xclang /home/clf/HAKC/PMC-Pass/build/lib/libPMCPass.so"  -j127 2> error.log
+```

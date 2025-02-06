@@ -4,6 +4,7 @@
  */
 
 #include "PMCPass.h"
+#include <map>
 
 using namespace llvm;
 
@@ -3397,11 +3398,79 @@ namespace {
             }
         }
     }
+    enum {
+        DATA_CHECK_NAME,
+        CODE_CHECK_NAME,
+        TRANSFER_NAME,
+        GET_COLOR_NAME,
+        CLAQUE_TRANSFER_NAME,
+        GET_SAFE_PTR_NAME,
+        SIGN_PTR_WITH_COLOR_NAME,
+        SIGN_PTR_NAME,
+        PER_CPU_TRANSFER_NAME,
+        TARGET_SIZE
+    };
 
     struct PMCPass : public ModulePass {
         static char ID;
-
+        std::map<Function *, std::vector<int>> profile_result;
         PMCPass() : ModulePass(ID) {}
+        
+        // 建立从func到不同指令数的映射
+        void profile(Module &M) {
+            // 识别每个驱动函数中插入了多少个sign/auth
+            for (auto &func : M) {
+                if (func.isIntrinsic() || func.isDeclaration())
+                    continue;
+                profile_result[&func] = std::vector<int>(TARGET_SIZE);
+                for (auto &BB : func) {
+                    for (auto &inst : BB) {
+                        if (auto callInst = dyn_cast<CallInst>(&inst); callInst != nullptr) {
+                            auto callee = callInst->getCalledFunction();
+                            if (callee != nullptr) {
+                                errs() << callee->getName() << "\n";
+                                if (callee->getName() == data_check_name) {
+                                    profile_result[&func][DATA_CHECK_NAME]++;
+                                } else if (callee->getName() == code_check_name) {
+                                    profile_result[&func][CODE_CHECK_NAME]++;
+                                } else if (callee->getName() == transfer_name) {
+                                    profile_result[&func][TRANSFER_NAME]++;
+                                } else if (callee->getName() == get_color_name) {
+                                    profile_result[&func][GET_COLOR_NAME]++;
+                                } else if (callee->getName() == claque_transfer_name) {
+                                    profile_result[&func][CLAQUE_TRANSFER_NAME]++;
+                                } else if (callee->getName() == get_safe_ptr_name) {
+                                    profile_result[&func][GET_SAFE_PTR_NAME]++;
+                                } else if (callee->getName() == sign_ptr_with_color_name) {
+                                    profile_result[&func][SIGN_PTR_WITH_COLOR_NAME]++;
+                                } else if (callee->getName() == sign_ptr_name) {
+                                    profile_result[&func][SIGN_PTR_NAME]++;
+                                } else if (callee->getName() == per_cpu_transfer_name) {
+                                    profile_result[&func][PER_CPU_TRANSFER_NAME]++;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        void dump_profile_result(llvm::raw_fd_ostream &file) {
+            for (auto iter : profile_result) {
+                file << "|------|------|------|------|------|------|------|------|"
+                "------|------|\n";
+                file << "| " << iter.first->getName() << 
+                        " | " << iter.second[DATA_CHECK_NAME] << 
+                        " | " << iter.second[CODE_CHECK_NAME] <<
+                        " | " << iter.second[TRANSFER_NAME] << 
+                        " | " << iter.second[GET_COLOR_NAME] <<
+                        " | " << iter.second[CLAQUE_TRANSFER_NAME] << 
+                        " | " << iter.second[GET_SAFE_PTR_NAME] <<
+                        " | " << iter.second[SIGN_PTR_WITH_COLOR_NAME] << 
+                        " | " << iter.second[SIGN_PTR_NAME] << 
+                        " | " << iter.second[PER_CPU_TRANSFER_NAME] << " |\n";
+            }
+        }
 
         bool runOnModule(Module &M) override {
             HAKCModuleTransformation transformation(M);
@@ -3420,6 +3489,11 @@ namespace {
                 llvm::raw_fd_ostream ll_file(ll_fd, true, true);
                 M.print(ll_file, nullptr);
                 ll_file.close();
+                profile(M);
+                int profile_fd;
+                llvm::sys::fs::openFileForWrite(M.getSourceFileName().substr(0, M.getSourceFileName().size()-2) + "_profile", profile_fd);
+                llvm::raw_fd_ostream pf_file(profile_fd, true, true);
+                dump_profile_result(pf_file);
             }
             return transformation.isModuleTransformed();
         }
