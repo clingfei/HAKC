@@ -4,7 +4,14 @@
  */
 
 #include "PMCPass.h"
+#include <cassert>
+#include <llvm-11/llvm/IR/Constants.h>
+#include <llvm-11/llvm/IR/GlobalVariable.h>
+#include <llvm-11/llvm/IR/IRBuilder.h>
+#include <llvm-11/llvm/IR/Instructions.h>
 #include <map>
+
+#define PROFILE 
 
 using namespace llvm;
 
@@ -180,6 +187,20 @@ namespace {
     const StringRef sign_ptr_name = "hakc_sign_pointer";
     const StringRef per_cpu_transfer_name = "hakc_transfer_percpu_to_clique";
 
+#ifdef PROFILE
+    const std::set<StringRef> hakc_func = {
+        data_check_name,
+        code_check_name,
+        transfer_name,
+        get_color_name,
+        claque_transfer_name,
+        get_safe_ptr_name,
+        sign_ptr_with_color_name,
+        sign_ptr_name,
+        per_cpu_transfer_name
+    };
+#endif
+
     const StringRef claque_id_name = "__claque_id";
     const StringRef color_name = "__color";
     const StringRef access_token_name = "__acl_tok";
@@ -207,6 +228,8 @@ namespace {
             "drivers/i2c",
             "lib/percpu_counter.c",
             "lib/vsprintf.c",
+            "block",
+            "drivers/block/null_blk/"
     };
 
     /**
@@ -690,6 +713,11 @@ namespace {
         if(F->isIntrinsic()) {
             return false;
         }
+#ifdef PROFILE
+        if (F->getName() == "dump_profile_result") {
+            return false;
+        }
+#endif
         return true;
     }
 
@@ -3415,20 +3443,122 @@ namespace {
         static char ID;
         std::map<Function *, std::vector<int>> profile_result;
         PMCPass() : ModulePass(ID) {}
+
+#ifdef PROFILE
+        void InstrumentCounterInc(Module &M, IRBuilder<> &irBuilder, GlobalVariable *counter) {
+            auto loadInst = irBuilder.CreateLoad(counter);
+			loadInst->print(errs());
+			errs() << "\n";
+            auto add = irBuilder.CreateAdd(loadInst, ConstantInt::get(Type::getInt64Ty(M.getContext()), 1));
+            auto store = irBuilder.CreateStore(add, counter);
+        }
+
+        // count how many hakc apis are called for each driver function.
+        void dynamic_profile(Module &M) {
+            for (auto &func : M) {
+                if (func.isIntrinsic() || func.isDeclaration() || func.empty()) 
+                    continue;
+                if (func.getName() == "dump_profile_result" || 
+					func.getName() == "init_module" ||
+					func.getName() == "cleanup_module")
+                    continue;
+                for (auto iter = hakc_func.begin(); iter != hakc_func.end(); iter++) {
+					auto counter_name = func.getName().str() + "_" + iter->str() + "_counter";
+					// auto counter = new GlobalVariable(Type::getInt64Ty(M.getContext()), false, 
+					// 	GlobalValue::InternalLinkage, 0, counter_name);
+					Constant *init_val = ConstantInt::get(Type::getInt64Ty(M.getContext()), 0);
+					auto *counter = new GlobalVariable(M, Type::getInt64Ty(M.getContext()),
+						false, GlobalValue::InternalLinkage,
+						init_val, counter_name);
+
+					// auto *GV = new GlobalVariable(
+      				// 	*M, StrConstant->getType(), true, GlobalValue::PrivateLinkage,
+      				// 	StrConstant, Name, nullptr, GlobalVariable::NotThreadLocal, AddressSpace);
+
+
+					counter->setUnnamedAddr(GlobalValue::UnnamedAddr::None);
+					counter->setAlignment(Align(8));
+					for (auto &BB : func) {
+                    	for (auto &inst : BB) {
+                        	if (auto callInst = dyn_cast<CallInst>(&inst); callInst != nullptr) {
+                            	auto callee = callInst->getCalledFunction();
+                            	if (callee != nullptr && !callee->isIntrinsic()) {
+									if (callee->getName() == iter->str()) {
+										callInst->print(errs());
+										errs() << "\n";
+                                    	IRBuilder<> irBuilder(callInst);
+                                    	InstrumentCounterInc(M, irBuilder, counter);
+                                	}
+                           		}
+                        	}
+				    	}
+    	            }
+                }
+            }
+
+        }
+
+        void dynamic_profile_dump_ctor(Module &M) {
+            auto targetFunc = M.getFunction("dump_profile_result");
+            assert(targetFunc != nullptr && "Error! There is no dump_profile_result in Module");
+            IRBuilder<> irBuilder(targetFunc->getEntryBlock().getFirstNonPHIOrDbgOrLifetime());
+            std::string outline = "func, ";
+            for (auto iter = hakc_func.begin(); iter != hakc_func.end(); iter++) {
+                outline += iter->str() + ", ";
+            }
+            outline += "\n";
+            auto otl = irBuilder.CreateGlobalStringPtr(outline);
+            auto elementType = Type::getInt8Ty(M.getContext());
+            auto otlType = ArrayType::get(elementType, outline.size());
+            auto otl_ftype = FunctionType::get(Type::getVoidTy(targetFunc->getContext()), 
+				{otlType}, true);
+            auto callee = M.getOrInsertFunction("_printk", otl_ftype);
+            irBuilder.CreateCall(callee, {otl});
+
+            std::string format = "%s, %d, %d, %d, %d, %d, %d, %d, %d, %d, \n";
+            auto fmt = irBuilder.CreateGlobalStringPtr(format);
+            for (auto &func : M) {
+                if (func.isIntrinsic() || func.isDeclaration() || func.empty())
+                    continue;
+                if (func.getName() == "dump_profile_result" || 
+					func.getName() == "init_module" || 
+					func.getName() == "cleanup_module")
+                    continue;
+				errs() << func.getName().str() << "\n";
+                auto fmtType = ArrayType::get(elementType, format.size());
+                auto fmt_ftype = FunctionType::get(Type::getInt32Ty(targetFunc->getContext()), 
+					{fmtType}, true);
+                auto callee = M.getOrInsertFunction("_printk", fmt_ftype);
+				auto cur_func = irBuilder.CreateGlobalStringPtr(func.getName().str());
+                std::vector<Value *> args = {fmt, cur_func};
+
+                for (auto iter = hakc_func.begin(); iter != hakc_func.end(); iter++) {
+                    auto ctr_name = func.getName().str() + "_" + iter->str() + "_counter";
+					auto counter = M.getNamedGlobal(ctr_name);
+                    if (!counter)
+						errs() << "cannot find " << ctr_name << "\n";
+					args.push_back(counter);
+                }
+
+                irBuilder.CreateCall(callee, args);
+            }
+        }
         
         // 建立从func到不同指令数的映射
-        void profile(Module &M) {
+        void static_profile(Module &M) {
             // 识别每个驱动函数中插入了多少个sign/auth
             for (auto &func : M) {
-                if (func.isIntrinsic() || func.isDeclaration())
+                if (func.isIntrinsic() || func.isDeclaration() || func.empty())
+                    continue;
+                if (func.getName() == "dump_profile_result")
                     continue;
                 profile_result[&func] = std::vector<int>(TARGET_SIZE);
                 for (auto &BB : func) {
                     for (auto &inst : BB) {
                         if (auto callInst = dyn_cast<CallInst>(&inst); callInst != nullptr) {
                             auto callee = callInst->getCalledFunction();
-                            if (callee != nullptr) {
-                                errs() << callee->getName() << "\n";
+                            if (callee != nullptr && !callee->isIntrinsic()) {
+                                // errs() << callee->getName() << "\n";
                                 if (callee->getName() == data_check_name) {
                                     profile_result[&func][DATA_CHECK_NAME]++;
                                 } else if (callee->getName() == code_check_name) {
@@ -3455,7 +3585,7 @@ namespace {
             }
         }
 
-        void dump_profile_result(llvm::raw_fd_ostream &file) {
+        void dump_static_profile_result(llvm::raw_fd_ostream &file) {
             for (auto iter : profile_result) {
                 file << "|------|------|------|------|------|------|------|------|"
                 "------|------|\n";
@@ -3471,6 +3601,8 @@ namespace {
                         " | " << iter.second[PER_CPU_TRANSFER_NAME] << " |\n";
             }
         }
+ 
+#endif
 
         bool runOnModule(Module &M) override {
             HAKCModuleTransformation transformation(M);
@@ -3489,11 +3621,25 @@ namespace {
                 llvm::raw_fd_ostream ll_file(ll_fd, true, true);
                 M.print(ll_file, nullptr);
                 ll_file.close();
-                profile(M);
-                int profile_fd;
-                llvm::sys::fs::openFileForWrite(M.getSourceFileName().substr(0, M.getSourceFileName().size()-2) + "_profile", profile_fd);
-                llvm::raw_fd_ostream pf_file(profile_fd, true, true);
-                dump_profile_result(pf_file);
+#ifdef PROFILE
+				if (M.getFunction("dump_profile_result") != nullptr) {
+                	static_profile(M);
+					int profile_fd;
+                	llvm::sys::fs::openFileForWrite(M.getSourceFileName().substr(0, M.getSourceFileName().size()-2) + "_profile", profile_fd);
+                	llvm::raw_fd_ostream pf_file(profile_fd, true, true);
+                	dump_static_profile_result(pf_file);
+				}
+                if (M.getFunction("dump_profile_result") != nullptr) {
+                    dynamic_profile(M);
+					llvm::sys::fs::openFileForWrite(M.getSourceFileName() + "_dump.ll", ll_fd);
+                	llvm::raw_fd_ostream ll_file(ll_fd, true, true);
+                	M.print(ll_file, nullptr);
+                	ll_file.close();
+                    dynamic_profile_dump_ctor(M);
+
+                }
+                return true;
+#endif
             }
             return transformation.isModuleTransformed();
         }

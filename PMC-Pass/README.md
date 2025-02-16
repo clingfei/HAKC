@@ -42,5 +42,7 @@ To boot PMC Protected kernel
 
 ## Usage
 ```
-make LLVM=1 KCFLAGS="-g -Xclang -no-opaque-pointers -Xclang -load -Xclang /home/clf/HAKC/PMC-Pass/build/lib/libPMCPass.so"  -j127 2> error.log
+make LLVM=1 KCFLAGS="-g -Xclang -no-opaque-pointers -Xclang -load -Xclang /path/to/HAKC/PMC-Pass/build/lib/libPMCPass.so"  -j127 2> error.log
 ```
+
+在源码中打开PROFILE的定义以启用对特定驱动profile的插桩支持，作用是统计benchmark下不同hakc api的调用次数。
