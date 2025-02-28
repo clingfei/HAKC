@@ -11,7 +11,7 @@
 #include <llvm-11/llvm/IR/Instructions.h>
 #include <map>
 
-#define PROFILE 
+// #define PROFILE 
 
 using namespace llvm;
 
@@ -212,7 +212,7 @@ namespace {
      * @brief The set of files to run our analysis on
      */
     const std::set<StringRef> source_files_to_instrument = {
-            // "../net/",
+            "net/",
             "fs/char_dev.c",
             "fs/ioctl.c",
 
@@ -229,7 +229,8 @@ namespace {
             "lib/percpu_counter.c",
             "lib/vsprintf.c",
             "block",
-            "drivers/block/null_blk/"
+            "drivers/block/null_blk/",
+			"drivers/net/ethernet/broadcom/"
     };
 
     /**
